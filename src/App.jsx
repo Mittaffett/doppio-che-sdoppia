@@ -124,14 +124,14 @@ export default function TennisTournamentApp() {
   const [tab, setTab] = useState("iscritti");
   const [mode, setMode] = useState("singolare"); // singolare | doppio
   const [tournamentName, setTournamentName] = useState("Torneo Sociale");
-  const [participants, setParticipants] = useState([]); // {id, label}
+  const [participants, setParticipants] = useState([]); // singolare: players, doppio: players {id,label,level}
+  const [doubleTeams, setDoubleTeams] = useState([]); // {id,p1,p2,label}
   const [rounds, setRounds] = useState(null);
 
   // form state
   const [singleName, setSingleName] = useState("");
-  const [p1, setP1] = useState("");
-  const [p2, setP2] = useState("");
-  const [teamName, setTeamName] = useState("");
+  const [doublePlayerName, setDoublePlayerName] = useState("");
+  const [doublePlayerLevel, setDoublePlayerLevel] = useState("basso");
 
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
@@ -147,6 +147,7 @@ export default function TennisTournamentApp() {
           if (data.tournamentName) setTournamentName(data.tournamentName);
           if (data.mode) setMode(data.mode);
           if (data.participants) setParticipants(data.participants);
+          if (data.doubleTeams) setDoubleTeams(data.doubleTeams);
           if (data.rounds) setRounds(data.rounds);
         }
       } catch (e) {
@@ -163,14 +164,14 @@ export default function TennisTournamentApp() {
     if (hydrating.current) return;
     (async () => {
       try {
-        const payload = JSON.stringify({ tournamentName, mode, participants, rounds });
+        const payload = JSON.stringify({ tournamentName, mode, participants, doubleTeams, rounds });
         localStorage.setItem(STORAGE_KEY, payload);
         setSaveError(false);
       } catch (e) {
         setSaveError(true);
       }
     })();
-  }, [tournamentName, mode, participants, rounds]);
+  }, [tournamentName, mode, participants, doubleTeams, rounds]);
 
   const clearSavedData = async () => {
     if (!window.confirm("Cancellare tutti i dati salvati del torneo? L'azione non è reversibile.")) return;
@@ -182,6 +183,7 @@ export default function TennisTournamentApp() {
     setTournamentName("Torneo Sociale");
     setMode("singolare");
     setParticipants([]);
+    setDoubleTeams([]);
     setRounds(null);
     setTab("iscritti");
   };
@@ -193,27 +195,94 @@ export default function TennisTournamentApp() {
     setSingleName("");
   };
 
-  const addTeam = () => {
-    const n1 = p1.trim(),
-      n2 = p2.trim();
-    if (!n1 || !n2) return;
-    const label = teamName.trim() || `${n1} / ${n2}`;
-    setParticipants((p) => [...p, { id: uid(), label }]);
-    setP1("");
-    setP2("");
-    setTeamName("");
+  const addDoublePlayer = () => {
+    const name = doublePlayerName.trim();
+    if (!name) return;
+    setParticipants((p) => [...p, { id: uid(), label: name, level: doublePlayerLevel }]);
+    setDoublePlayerName("");
   };
 
   const removeParticipant = (id) => {
     setParticipants((p) => p.filter((x) => x.id !== id));
+    setDoubleTeams((teams) =>
+      teams.map((t) => ({
+        ...t,
+        p1: t.p1 === id ? "" : t.p1,
+        p2: t.p2 === id ? "" : t.p2,
+      }))
+    );
+  };
+
+  const createEmptyDoubleTeams = () => {
+    const count = Math.floor(participants.length / 2);
+    setDoubleTeams(
+      Array.from({ length: count }, (_, i) => ({
+        id: uid(),
+        p1: "",
+        p2: "",
+        label: "",
+      }))
+    );
+  };
+
+  const makeRandomDoubleTeams = () => {
+    if (participants.length < 4) return;
+    const players = [...participants];
+    const high = players.filter((p) => p.level === "alto");
+    const low = players.filter((p) => p.level === "basso");
+    const shuffle = (arr) => {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    };
+
+    const h = shuffle(high);
+    const l = shuffle(low);
+    const pairs = [];
+    while (h.length && l.length) pairs.push([h.pop().id, l.pop().id]);
+
+    const remaining = shuffle([...h, ...l].map((p) => (typeof p === "string" ? p : p.id)));
+    while (remaining.length >= 2) pairs.push([remaining.pop(), remaining.pop()]);
+
+    // If an odd player remains, leave them out of the team draw and show it clearly.
+    setDoubleTeams(
+      pairs.map(([p1id, p2id]) => ({
+        id: uid(),
+        p1: p1id,
+        p2: p2id,
+        label: "",
+      }))
+    );
+  };
+
+  const updateDoubleTeam = (teamId, patch) => {
+    setDoubleTeams((teams) => teams.map((t) => (t.id === teamId ? { ...t, ...patch } : t)));
+  };
+
+  const teamFromSlot = (slot) => {
+    const a = participants.find((p) => p.id === slot.p1);
+    const b = participants.find((p) => p.id === slot.p2);
+    if (!a || !b) return null;
+    return {
+      id: slot.id,
+      label: slot.label.trim() || `${a.label} / ${b.label}`,
+      players: [a, b],
+    };
   };
 
   const generateBracket = () => {
-    if (participants.length < 2) return;
-    const size = nextPow2(participants.length);
-    const entrants = [...participants];
-    while (entrants.length < size) entrants.push(null); // BYE
-    // simple shuffle for fairer draw
+    const entrantsSource =
+      mode === "doppio" ? doubleTeams.map(teamFromSlot).filter(Boolean) : participants;
+
+    if (entrantsSource.length < 2) return;
+    if (mode === "doppio" && entrantsSource.length !== doubleTeams.length) return;
+
+    const size = nextPow2(entrantsSource.length);
+    const entrants = [...entrantsSource];
+    while (entrants.length < size) entrants.push(null);
     for (let i = entrants.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [entrants[i], entrants[j]] = [entrants[j], entrants[i]];
@@ -289,7 +358,7 @@ export default function TennisTournamentApp() {
           outline: 2px solid ${C.ball};
           outline-offset: 2px;
         }
-        @media (prefers-reduced-motion: reduce) {
+        @media (max-width: 700px) { .teamSlot { grid-template-columns: 1fr; } }\n        @media (prefers-reduced-motion: reduce) {
           .tt-fade { animation: none !important; }
         }
         @keyframes ttFade { from { opacity: 0; transform: translateY(4px);} to { opacity:1; transform:none; } }
@@ -339,13 +408,15 @@ export default function TennisTournamentApp() {
             singleName={singleName}
             setSingleName={setSingleName}
             addSingle={addSingle}
-            p1={p1}
-            p2={p2}
-            teamName={teamName}
-            setP1={setP1}
-            setP2={setP2}
-            setTeamName={setTeamName}
-            addTeam={addTeam}
+            doublePlayerName={doublePlayerName}
+            setDoublePlayerName={setDoublePlayerName}
+            doublePlayerLevel={doublePlayerLevel}
+            setDoublePlayerLevel={setDoublePlayerLevel}
+            addDoublePlayer={addDoublePlayer}
+            doubleTeams={doubleTeams}
+            createEmptyDoubleTeams={createEmptyDoubleTeams}
+            makeRandomDoubleTeams={makeRandomDoubleTeams}
+            updateDoubleTeam={updateDoubleTeam}
             removeParticipant={removeParticipant}
             generateBracket={generateBracket}
             resetTournament={resetTournament}
@@ -390,18 +461,25 @@ function IscrittiTab(props) {
     singleName,
     setSingleName,
     addSingle,
-    p1,
-    p2,
-    teamName,
-    setP1,
-    setP2,
-    setTeamName,
-    addTeam,
+    doublePlayerName,
+    setDoublePlayerName,
+    doublePlayerLevel,
+    setDoublePlayerLevel,
+    addDoublePlayer,
+    doubleTeams,
+    createEmptyDoubleTeams,
+    makeRandomDoubleTeams,
+    updateDoubleTeam,
     removeParticipant,
     generateBracket,
     resetTournament,
     clearSavedData,
   } = props;
+
+  const assigned = new Set(
+    doubleTeams.flatMap((t) => [t.p1, t.p2]).filter(Boolean)
+  );
+  const unassigned = participants.filter((p) => !assigned.has(p.id));
 
   return (
     <div>
@@ -429,8 +507,9 @@ function IscrittiTab(props) {
 
       <div style={styles.card}>
         <div style={styles.cardLabel}>
-          {mode === "singolare" ? "Aggiungi giocatore" : "Forma una squadra"}
+          {mode === "singolare" ? "Aggiungi giocatore" : "Aggiungi giocatore al doppio"}
         </div>
+
         {mode === "singolare" ? (
           <div style={styles.formRow}>
             <input
@@ -440,37 +519,30 @@ function IscrittiTab(props) {
               onChange={(e) => setSingleName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addSingle()}
             />
-            <button className="tt-btn" style={styles.addBtn} onClick={addSingle}>
-              Aggiungi
-            </button>
+            <button className="tt-btn" style={styles.addBtn} onClick={addSingle}>Aggiungi</button>
           </div>
         ) : (
           <div>
             <div style={styles.formRow}>
               <input
                 style={styles.input}
-                placeholder="Giocatore 1"
-                value={p1}
-                onChange={(e) => setP1(e.target.value)}
+                placeholder="Nome e cognome"
+                value={doublePlayerName}
+                onChange={(e) => setDoublePlayerName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addDoublePlayer()}
               />
-              <input
+              <select
                 style={styles.input}
-                placeholder="Giocatore 2"
-                value={p2}
-                onChange={(e) => setP2(e.target.value)}
-              />
+                value={doublePlayerLevel}
+                onChange={(e) => setDoublePlayerLevel(e.target.value)}
+              >
+                <option value="alto">Livello alto</option>
+                <option value="basso">Livello basso</option>
+              </select>
+              <button className="tt-btn" style={styles.addBtn} onClick={addDoublePlayer}>Aggiungi</button>
             </div>
-            <div style={{ ...styles.formRow, marginTop: 10 }}>
-              <input
-                style={styles.input}
-                placeholder="Nome squadra (opzionale)"
-                value={teamName}
-                onChange={(e) => setTeamName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addTeam()}
-              />
-              <button className="tt-btn" style={styles.addBtn} onClick={addTeam}>
-                Aggiungi
-              </button>
+            <div style={styles.hint}>
+              Nel sorteggio casuale il sistema cerca di abbinare, quando possibile, un giocatore di livello alto con uno di livello basso.
             </div>
           </div>
         )}
@@ -478,7 +550,7 @@ function IscrittiTab(props) {
 
       <div style={styles.card}>
         <div style={styles.cardLabel}>
-          {mode === "singolare" ? "Giocatori iscritti" : "Squadre iscritte"} ({participants.length})
+          {mode === "singolare" ? "Giocatori iscritti" : "Giocatori iscritti"} ({participants.length})
         </div>
         {participants.length === 0 ? (
           <div style={styles.mutedText}>Nessun iscritto ancora.</div>
@@ -487,14 +559,14 @@ function IscrittiTab(props) {
             {participants.map((p, i) => (
               <li key={p.id} style={styles.listItem}>
                 <span style={styles.listIndex}>{String(i + 1).padStart(2, "0")}</span>
-                <span style={styles.listLabel}>{p.label}</span>
+                <span style={styles.listLabel}>
+                  {p.label}
+                  {mode === "doppio" && p.level && (
+                    <span style={styles.levelBadge}>{p.level === "alto" ? "ALTO" : "BASSO"}</span>
+                  )}
+                </span>
                 {!hasBracket && (
-                  <button
-                    className="tt-btn"
-                    onClick={() => removeParticipant(p.id)}
-                    style={styles.removeBtn}
-                    aria-label={`Rimuovi ${p.label}`}
-                  >
+                  <button className="tt-btn" onClick={() => removeParticipant(p.id)} style={styles.removeBtn}>
                     ✕
                   </button>
                 )}
@@ -504,16 +576,97 @@ function IscrittiTab(props) {
         )}
       </div>
 
+      {mode === "doppio" && !hasBracket && (
+        <div style={styles.card}>
+          <div style={styles.cardLabel}>Composizione squadre</div>
+
+          {participants.length < 4 ? (
+            <div style={styles.mutedText}>
+              Per creare un torneo di doppio servono almeno 4 giocatori.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                <button className="tt-btn" style={styles.primaryBtn} onClick={makeRandomDoubleTeams}>
+                  🎲 Crea squadre casualmente
+                </button>
+                <button className="tt-btn" style={styles.secondaryBtn} onClick={createEmptyDoubleTeams}>
+                  ✎ Crea squadre manualmente
+                </button>
+              </div>
+
+              <div style={styles.hint}>
+                Il metodo casuale privilegia gli abbinamenti <b>ALTO + BASSO</b> quando disponibili.
+                Con un numero dispari di giocatori, l'ultimo giocatore non viene inserito nel torneo.
+              </div>
+
+              {doubleTeams.length > 0 && (
+                <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
+                  {doubleTeams.map((team, index) => (
+                    <div key={team.id} style={styles.teamSlot}>
+                      <div style={styles.teamSlotTitle}>SQUADRA {index + 1}</div>
+
+                      <select
+                        style={styles.input}
+                        value={team.p1}
+                        onChange={(e) => updateDoubleTeam(team.id, { p1: e.target.value })}
+                      >
+                        <option value="">Giocatore 1…</option>
+                        {participants
+                          .filter((p) => p.id === team.p1 || !assigned.has(p.id))
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>{p.label} · {p.level === "alto" ? "alto" : "basso"}</option>
+                          ))}
+                      </select>
+
+                      <select
+                        style={styles.input}
+                        value={team.p2}
+                        onChange={(e) => updateDoubleTeam(team.id, { p2: e.target.value })}
+                      >
+                        <option value="">Giocatore 2…</option>
+                        {participants
+                          .filter((p) => p.id === team.p2 || !assigned.has(p.id))
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>{p.label} · {p.level === "alto" ? "alto" : "basso"}</option>
+                          ))}
+                      </select>
+
+                      <input
+                        style={styles.input}
+                        placeholder="Nome squadra (opzionale)"
+                        value={team.label}
+                        onChange={(e) => updateDoubleTeam(team.id, { label: e.target.value })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {unassigned.length > 0 && doubleTeams.length > 0 && (
+                <div style={styles.hint}>
+                  Non ancora assegnati: {unassigned.map((p) => p.label).join(", ")}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
         {!hasBracket ? (
           <button
             className="tt-btn"
             style={{
               ...styles.primaryBtn,
-              opacity: participants.length < 2 ? 0.5 : 1,
-              cursor: participants.length < 2 ? "not-allowed" : "pointer",
+              opacity: (mode === "doppio" ? doubleTeams.filter((t) => t.p1 && t.p2).length : participants.length) < 2 ? 0.5 : 1,
+              cursor: "pointer",
             }}
-            disabled={participants.length < 2}
+            disabled={
+              mode === "doppio"
+                ? doubleTeams.length < 2 || doubleTeams.some((t) => !t.p1 || !t.p2)
+                : participants.length < 2
+            }
             onClick={generateBracket}
           >
             Genera tabellone →
@@ -524,11 +677,21 @@ function IscrittiTab(props) {
           </button>
         )}
       </div>
-      {participants.length >= 2 && !hasBracket && (participants.length & (participants.length - 1)) !== 0 && (
+
+      {mode === "singolare" && participants.length >= 2 && !hasBracket &&
+        (participants.length & (participants.length - 1)) !== 0 && (
         <div style={styles.hint}>
           Con {participants.length} iscritti, {nextPow2(participants.length) - participants.length}{" "}
           {nextPow2(participants.length) - participants.length === 1 ? "posizione" : "posizioni"} del
-          tabellone {nextPow2(participants.length) - participants.length === 1 ? "sarà" : "saranno"} un turno di riposo (bye).
+          tabellone saranno un turno di riposo (bye).
+        </div>
+      )}
+
+      {mode === "doppio" && doubleTeams.length >= 2 && !hasBracket &&
+        (doubleTeams.length & (doubleTeams.length - 1)) !== 0 && (
+        <div style={styles.hint}>
+          Con {doubleTeams.length} squadre, {nextPow2(doubleTeams.length) - doubleTeams.length}{" "}
+          {nextPow2(doubleTeams.length) - doubleTeams.length === 1 ? "posizione" : "posizioni"} del tabellone saranno un turno di riposo (bye).
         </div>
       )}
 
@@ -537,7 +700,7 @@ function IscrittiTab(props) {
           Cancella dati salvati del torneo
         </button>
         <span style={styles.clearDataHint}>
-          I dati sono salvati automaticamente solo per te, su questo account. Usa questo pulsante a fine torneo.
+          I dati sono salvati automaticamente solo per te, su questo account.
         </span>
       </div>
     </div>
@@ -884,6 +1047,44 @@ const styles = {
     fontWeight: 700,
     cursor: "pointer",
     fontSize: 14,
+  },
+  secondaryBtn: {
+    background: "transparent",
+    color: C.chalk,
+    border: `1px solid rgba(245,243,238,0.25)`,
+    borderRadius: 8,
+    padding: "13px 22px",
+    fontWeight: 700,
+    fontSize: 14,
+    cursor: "pointer",
+  },
+  levelBadge: {
+    display: "inline-block",
+    marginLeft: 8,
+    padding: "2px 6px",
+    borderRadius: 999,
+    fontSize: 9,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.06em",
+    background: "rgba(207,224,74,0.15)",
+    color: C.ball,
+    verticalAlign: "middle",
+  },
+  teamSlot: {
+    display: "grid",
+    gridTemplateColumns: "minmax(120px, 0.8fr) minmax(120px, 1fr) minmax(120px, 1fr)",
+    gap: 10,
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 8,
+    border: "1px solid rgba(245,243,238,0.12)",
+    background: "rgba(255,255,255,0.025)",
+  },
+  teamSlotTitle: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: C.ball,
+    fontWeight: 700,
   },
   primaryBtn: {
     background: C.ball,
